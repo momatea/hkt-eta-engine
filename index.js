@@ -169,7 +169,8 @@ async function processFlightData(allFlights, groupName) {
             }
 
             // ถ้าเป็นไฟลท์ใหม่เพิ่งเข้าโซนมา ถึงจะเอาไปต่อคิวดึงข้อมูล
-            const delay = requestIndex * 300; 
+            // ปรับหน่วงเวลาเป็น 3 วินาทีต่อ 1 ลำ เพื่อป้องกันการโดนแบนตอนเปิดเซิร์ฟเวอร์ใหม่
+            const delay = requestIndex * 3000; 
             requestIndex++;
 
             detailPromises.push((async () => {
