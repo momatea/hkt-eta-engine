@@ -133,7 +133,6 @@ async function processFlightData(allFlights, groupName) {
 
     try {
         const responseData = new Map();
-        const responseData = new Map();
 
         for (const flight of allFlights) {
             const destination = (flight.destination || "").toUpperCase();
