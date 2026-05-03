@@ -140,7 +140,8 @@ async function processFlightData(allFlights, groupName) {
             const destination = (flight.destination || "").toUpperCase();
             
             // กรอง 1: เอาเฉพาะไฟลท์ที่เป้าหมายคือ HKT
-            if (destination !== "HKT") continue;
+            // (แต่ถ้าเป็นเครื่องที่เราตามมาตั้งแต่บนฟ้า ให้ผ่านได้เลย เพราะตอนแตะพื้น FR24 มักจะลบข้อมูล destination ทิ้ง ทำให้ถูกเตะออก)
+            if (destination !== "HKT" && !trackedETAs.has(flight.id)) continue;
 
             // จัดการ IATA Code: ดึง flight.flight ก่อน (เช่น PG255) ถ้าไม่มีถึงจะดึง ICAO (BKP255)
             const flightCode = flight.flight || flight.callsign || flight.registration || 'UNKNOWN';
