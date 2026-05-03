@@ -8,6 +8,21 @@ const PORT = process.env.PORT || 3001;
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 app.use(cors({ origin: ALLOWED_ORIGIN }));
 
+// Middleware: API Key Security
+app.use((req, res, next) => {
+    // ปล่อยผ่าน Health Check ให้ Render เช็คสถานะได้
+    if (req.path === '/api/health') return next();
+
+    // รับ API Key จาก Header (x-api-key) หรือต่อท้าย URL (?apikey=...)
+    const providedKey = req.headers['x-api-key'] || req.query.apikey;
+    const SECRET_KEY = process.env.API_SECRET || 'HKT-ETA-SECRET-999';
+
+    if (providedKey !== SECRET_KEY) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
+    }
+    next();
+});
+
 // Rate Limiting (30 requests/min per IP)
 const rateLimitMap = new Map();
 const RATE_LIMIT_MAX = 30;
