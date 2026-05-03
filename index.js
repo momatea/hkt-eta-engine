@@ -65,13 +65,13 @@ const trackedETAs = new Map();
 
 const APPROACH_INTERVAL = 60000;     
 
-// Contiguous Approach Zones (5 Zones)
+// Contiguous Approach Zones (5 Massive Zones เพื่อไม่ให้ตกหล่นแม้แต่ลำเดียว)
 const APPROACH_ZONES = [
-    { name: 'HKT-Approach-Center', north: 8.5, west: 97.8, south: 7.5, east: 98.8, options: {} },
-    { name: 'HKT-Approach-North', north: 12.0, west: 97.0, south: 8.5, east: 100.0, options: {} },
-    { name: 'HKT-Approach-South', north: 7.5, west: 97.0, south: 3.0, east: 100.0, options: {} },
-    { name: 'HKT-Approach-East', north: 12.0, west: 100.0, south: 3.0, east: 105.0, options: {} },
-    { name: 'HKT-Approach-West', north: 12.0, west: 90.0, south: 3.0, east: 97.0, options: {} },
+    { name: 'HKT-Approach-Center', north: 10.0, west: 96.0, south: 6.0, east: 100.0, options: {} },
+    { name: 'HKT-Approach-North', north: 35.0, west: 85.0, south: 10.0, east: 125.0, options: {} },
+    { name: 'HKT-Approach-South', north: 6.0, west: 90.0, south: -15.0, east: 125.0, options: {} },
+    { name: 'HKT-Approach-East', north: 10.0, west: 100.0, south: 6.0, east: 125.0, options: {} },
+    { name: 'HKT-Approach-West', north: 10.0, west: 50.0, south: 6.0, east: 96.0, options: {} },
 ];
 
 const pollRunning = new Set(); 
@@ -131,18 +131,22 @@ async function processFlightData(allFlights, groupName) {
             const altitude = flight.altitude ?? 0;
             if (flight.isOnGround || altitude <= 1500) continue;
 
-            const callsign = flight.callsign || flight.flight || flight.registration || 'UNKNOWN';
-            const normCallsign = normalizeFlightNumber(callsign);
+            // จัดการ IATA Code: ดึง flight.flight ก่อน (เช่น PG255) ถ้าไม่มีถึงจะดึง ICAO (BKP255)
+            const flightCode = flight.flight || flight.callsign || flight.registration || 'UNKNOWN';
+            const normFlightCode = normalizeFlightNumber(flightCode);
 
             // The Smart Caching (1-Time Fetch) + 30 Mins TTL
-            // เช็คว่าไฟลท์นี้เคยดึง ETA มาแล้วหรือยัง และดึงมานานเกิน 30 นาทีหรือยัง
+            // เช็คว่าไฟลท์นี้เคยดึง ETA มาแล้วหรือยัง
             const nowMs = Date.now();
             if (trackedETAs.has(flight.id)) {
                 const cachedData = trackedETAs.get(flight.id);
-                // ถ้าค่าเดิมยังสดใหม่ (ไม่เกิน 30 นาที) ใช้ค่าเดิมเลย
-                if (nowMs - cachedData.fetchedAt < 30 * 60 * 1000) {
+                // ถ้ามี ETA แล้ว และอายุไม่เกิน 30 นาที -> ใช้ของเดิม
+                // แต่ถ้า ETA เป็น null (เคยดึงล้มเหลว) จะรอแค่ 2 นาทีแล้วให้ลองดึงใหม่
+                const isFresh = cachedData.eta ? (nowMs - cachedData.fetchedAt < 30 * 60 * 1000) : (nowMs - cachedData.fetchedAt < 2 * 60 * 1000);
+                
+                if (isFresh) {
                     responseData.set(flight.id, {
-                        Callsign: normCallsign,
+                        Flight: normFlightCode,
                         ETA: cachedData.eta
                     });
                     continue; // ข้ามการดึง API ไปเลย
@@ -163,19 +167,18 @@ async function processFlightData(allFlights, groupName) {
                     if (hktEta) trackedETAs.set(flight.id, { eta: hktEta, fetchedAt: Date.now() });
 
                     responseData.set(flight.id, {
-                        Callsign: normCallsign,
+                        Flight: normFlightCode,
                         ETA: hktEta || null
                     });
                 } catch (e) {
-                    console.error(`  ⚠️ Detail fetch failed for ${normCallsign}: ${e.message}`);
+                    console.error(`  ⚠️ Detail fetch failed for ${normFlightCode}: ${e.message}`);
                     
-                    // ป้องกันการ Spam เมื่อโดนบล็อค: 
-                    // ถ้าดึงพัง ให้จำเวลาปัจจุบันไว้เลยว่าเพิ่งลองดึงไป จะได้ไม่กลับมายิงถี่ๆ ทุก 1 นาทีให้โดนแบนหนักกว่าเดิม
+                    // ป้องกันการ Spam: ถ้าล้มเหลว เซฟ null ไว้ และรอ 2 นาทีค่อยลองใหม่ (แก้บั๊กที่ทำให้ขึ้น null ยาวๆ 30 นาที)
                     const oldEta = trackedETAs.has(flight.id) ? trackedETAs.get(flight.id).eta : null;
                     trackedETAs.set(flight.id, { eta: oldEta, fetchedAt: Date.now() });
 
                     responseData.set(flight.id, {
-                        Callsign: normCallsign,
+                        Flight: normFlightCode,
                         ETA: oldEta 
                     });
                 }
