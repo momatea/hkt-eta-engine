@@ -160,7 +160,7 @@ async function processFlightData(allFlights, groupName) {
             detailPromises.push((async () => {
                 try {
                     await new Promise(resolve => setTimeout(resolve, delay));
-                    const detail = await withTimeout(fetchFlight(flight.id), 30000, `ArrivalDetail-${callsign}`);
+                    const detail = await withTimeout(fetchFlight(flight.id), 30000, `ArrivalDetail-${flightCode}`);
                     const etaTime = detail.arrival || detail.scheduledArrival || null;
                     const hktEta = getHktTime(etaTime);
                     
