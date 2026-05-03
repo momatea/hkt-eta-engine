@@ -77,6 +77,7 @@ let lastFetchTime = null;
 
 // Cache สำหรับจำค่า ETA เก่า เผื่อโดน FR24 บล็อคชั่วคราว (นี่คือเทคนิคที่ระบบเก่าใช้ซ่อน Error ครับ)
 const trackedETAs = new Map();
+const etaFetchQueue = new Map(); // คิวการดึง ETA ช้าๆ (หนีแบน)
 
 const APPROACH_INTERVAL = 60000;     
 
@@ -86,8 +87,7 @@ const APPROACH_ZONES = [
     { name: 'HKT-Zone-West', north: 50.0, west: 40.0, south: -10.0, east: 90.0, options: {} }, // ตะวันออกกลาง (Dubai/Qatar), อินเดีย
     { name: 'HKT-Zone-North', north: 65.0, west: 90.0, south: 15.0, east: 110.0, options: {} }, // จีนตอนกลาง, รัสเซีย, พม่า
     { name: 'HKT-Zone-East', north: 55.0, west: 110.0, south: 15.0, east: 150.0, options: {} }, // ญี่ปุ่น, เกาหลี, ไต้หวัน, จีน
-    { name: 'HKT-Zone-South', north: 15.0, west: 110.0, south: -45.0, east: 160.0, options: {} }, // ออสเตรเลีย, อินโดนีเซีย
-    { name: 'HKT-Airport-Ground', north: 8.15, west: 98.28, south: 8.08, east: 98.35, options: {} } // โซนซูมเฉพาะสนามบินภูเก็ต (แก้บั๊กเรดาร์ซ่อนเครื่องบินบนพื้น)
+    { name: 'HKT-Zone-South', north: 15.0, west: 110.0, south: -45.0, east: 160.0, options: {} } // ออสเตรเลีย, อินโดนีเซีย
 ];
 
 const pollRunning = new Set(); 
@@ -133,104 +133,40 @@ async function processFlightData(allFlights, groupName) {
 
     try {
         const responseData = new Map();
-        const detailPromises = [];
-
-        let requestIndex = 0;
+        const responseData = new Map();
 
         for (const flight of allFlights) {
             const destination = (flight.destination || "").toUpperCase();
-            
-            // กรอง 1: เอาเฉพาะไฟลท์ที่เป้าหมายคือ HKT
-            // (แต่ถ้าเป็นเครื่องที่เราตามมาตั้งแต่บนฟ้า ให้ผ่านได้เลย เพราะตอนแตะพื้น FR24 มักจะลบข้อมูล destination ทิ้ง ทำให้ถูกเตะออก)
-            if (destination !== "HKT" && !trackedETAs.has(flight.id)) continue;
+            if (destination !== "HKT") continue;
 
-            // จัดการ IATA Code: ดึง flight.flight ก่อน (เช่น PG255) ถ้าไม่มีถึงจะดึง ICAO (BKP255)
             const flightCode = flight.flight || flight.callsign || flight.registration || 'UNKNOWN';
             const normFlightCode = normalizeFlightNumber(flightCode);
-
             const altitude = flight.altitude ?? 0;
 
-            // กรอง 2: ถ้าเป็นเครื่องใหม่ที่ไม่เคยติดตามมาก่อน แล้วอยู่ต่ำกว่า 1500 ฟุต หรืออยู่บนพื้น ให้ข้ามไปเลย (กันพวกเครื่องจอดแช่)
-            if (!trackedETAs.has(flight.id) && (flight.isOnGround || altitude <= 1500)) continue;
+            if (flight.isOnGround || altitude <= 1500) continue;
 
-            // ดักจับ: ถ้าเครื่องนี้เราติดตามมาตั้งแต่บนฟ้า แล้วตอนนี้แตะพื้นแล้ว (Landed)
-            if (flight.isOnGround) {
-                const cachedData = trackedETAs.get(flight.id);
-                let landedStr = cachedData.eta;
-                
-                // ถ้ายังไม่เคยถูก stamp ว่า Landed ให้สร้างข้อความ Landed ขึ้นมา
-                if (!landedStr || !landedStr.startsWith("Landed")) {
-                    // ดึงเวลา Server มาทำเป็นเวลาไทยแบบง่ายๆ
-                    const hktDate = new Date(Date.now() + 7 * 3600 * 1000);
-                    const hh = String(hktDate.getUTCHours()).padStart(2, '0');
-                    const mm = String(hktDate.getUTCMinutes()).padStart(2, '0');
-                    landedStr = `Landed (ATA: ${hh}:${mm})`;
-                    
-                    // เซฟทับลง Cache พร้อมเริ่มนับเวลาใหม่ 30 นาที (ก่อนจะโดนลบทิ้ง)
-                    trackedETAs.set(flight.id, { eta: landedStr, fetchedAt: Date.now() });
-                }
-                
-                responseData.set(flight.id, {
-                    Flight: normFlightCode,
-                    ETA: landedStr
-                });
-                continue; // ข้ามไปลำต่อไปเลย ไม่ต้องไปยิง API
-            }
-
-            // The Smart Caching (1-Time Fetch) + 5 Mins TTL
-            // เช็คว่าไฟลท์นี้เคยดึง ETA มาแล้วหรือยัง
             const nowMs = Date.now();
+            let currentEta = null;
+
             if (trackedETAs.has(flight.id)) {
                 const cachedData = trackedETAs.get(flight.id);
-                // ถ้ามี ETA แล้ว และอายุไม่เกิน 5 นาที -> ใช้ของเดิม (ช่วยให้อัปเดตเวลาได้เรื่อยๆ โดยไม่สแปมถี่เกินไป)
-                // แต่ถ้า ETA เป็น null (เคยดึงล้มเหลว) จะรอแค่ 2 นาทีแล้วให้ลองดึงใหม่
                 const isFresh = cachedData.eta ? (nowMs - cachedData.fetchedAt < 5 * 60 * 1000) : (nowMs - cachedData.fetchedAt < 2 * 60 * 1000);
                 
-                if (isFresh) {
-                    responseData.set(flight.id, {
-                        Flight: normFlightCode,
-                        ETA: cachedData.eta
-                    });
-                    continue; // ข้ามการดึง API ไปเลย
+                currentEta = cachedData.eta; // แสดงค่าเก่าไปก่อน
+                
+                if (!isFresh && !etaFetchQueue.has(flight.id)) {
+                    etaFetchQueue.set(flight.id, normFlightCode); // เอาลงคิวถ้าหมดอายุ
+                }
+            } else {
+                if (!etaFetchQueue.has(flight.id)) {
+                    etaFetchQueue.set(flight.id, normFlightCode); // เครื่องใหม่ เอาลงคิว
                 }
             }
 
-            // ถ้าเป็นไฟลท์ใหม่เพิ่งเข้าโซนมา ถึงจะเอาไปต่อคิวดึงข้อมูล
-            // ปรับหน่วงเวลาเป็น 3 วินาทีต่อ 1 ลำ เพื่อป้องกันการโดนแบนตอนเปิดเซิร์ฟเวอร์ใหม่
-            const delay = requestIndex * 3000; 
-            requestIndex++;
-
-            detailPromises.push((async () => {
-                try {
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    const detail = await withTimeout(fetchFlight(flight.id), 30000, `ArrivalDetail-${flightCode}`);
-                    const etaTime = detail.arrival || detail.scheduledArrival || null;
-                    const hktEta = getHktTime(etaTime);
-                    
-                    if (hktEta) trackedETAs.set(flight.id, { eta: hktEta, fetchedAt: Date.now() });
-
-                    responseData.set(flight.id, {
-                        Flight: normFlightCode,
-                        ETA: hktEta || null
-                    });
-                } catch (e) {
-                    console.error(`  ⚠️ Detail fetch failed for ${normFlightCode}: ${e.message}`);
-                    
-                    // ป้องกันการ Spam: ถ้าล้มเหลว เซฟ null ไว้ และรอ 2 นาทีค่อยลองใหม่ (แก้บั๊กที่ทำให้ขึ้น null ยาวๆ 30 นาที)
-                    const oldEta = trackedETAs.has(flight.id) ? trackedETAs.get(flight.id).eta : null;
-                    trackedETAs.set(flight.id, { eta: oldEta, fetchedAt: Date.now() });
-
-                    responseData.set(flight.id, {
-                        Flight: normFlightCode,
-                        ETA: oldEta 
-                    });
-                }
-            })());
-        }
-        
-        // Wait for all ETA detail requests to finish
-        if (detailPromises.length > 0) {
-            await Promise.all(detailPromises);
+            responseData.set(flight.id, {
+                Flight: normFlightCode,
+                ETA: currentEta
+            });
         }
 
         flightDataCache = Array.from(responseData.values());
@@ -240,7 +176,36 @@ async function processFlightData(allFlights, groupName) {
         releaseLock(); 
     }
 }
-
+// Background Queue Worker: ดึงข้อมูลทีละ 1 ลำ ทุกๆ 12 วินาที (ชัวร์ว่าไม่เกิน 5 ครั้ง/นาที หนีแบน 100%)
+setInterval(async () => {
+    if (etaFetchQueue.size === 0) return;
+    
+    // ดึงคิวแรกออกมา
+    const flightId = etaFetchQueue.keys().next().value;
+    const flightCode = etaFetchQueue.get(flightId);
+    etaFetchQueue.delete(flightId);
+    
+    try {
+        const detail = await withTimeout(fetchFlight(flightId), 30000, `QueueFetch`);
+        const etaTime = detail.arrival || detail.scheduledArrival || null;
+        const hktEta = getHktTime(etaTime);
+        
+        trackedETAs.set(flightId, { eta: hktEta, fetchedAt: Date.now() });
+        
+        // อัปเดต Cache ปัจจุบันให้หน้าเว็บเห็นทันทีโดยไม่ต้องรอรอบ 1 นาที
+        for (let item of flightDataCache) {
+            if (item.Flight === flightCode) {
+                item.ETA = hktEta || null;
+                break;
+            }
+        }
+    } catch (e) {
+        console.error(`  ⚠️ Queue fetch failed for ${flightCode}: ${e.message}`);
+        // ถ้าพลาด ให้เซฟค่าเดิมไปก่อนเพื่อรอ 2 นาทีค่อยเข้าคิวใหม่
+        const oldEta = trackedETAs.has(flightId) ? trackedETAs.get(flightId).eta : null;
+        trackedETAs.set(flightId, { eta: oldEta, fetchedAt: Date.now() }); 
+    }
+}, 12000);
 setInterval(() => pollGroup(APPROACH_ZONES, 'APPROACH'), APPROACH_INTERVAL);
 
 pollGroup(APPROACH_ZONES, 'APPROACH').catch(err => console.error(`[INIT] APPROACH poll failed: ${err.message}`));
