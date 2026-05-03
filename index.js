@@ -142,13 +142,38 @@ async function processFlightData(allFlights, groupName) {
             // กรอง 1: เอาเฉพาะไฟลท์ที่เป้าหมายคือ HKT
             if (destination !== "HKT") continue;
 
-            // กรอง 2: เอาเฉพาะไฟลท์ที่บินอยู่บนฟ้า (altitude > 1500 ฟุต และไม่ได้อยู่บนพื้น)
-            const altitude = flight.altitude ?? 0;
-            if (flight.isOnGround || altitude <= 1500) continue;
-
             // จัดการ IATA Code: ดึง flight.flight ก่อน (เช่น PG255) ถ้าไม่มีถึงจะดึง ICAO (BKP255)
             const flightCode = flight.flight || flight.callsign || flight.registration || 'UNKNOWN';
             const normFlightCode = normalizeFlightNumber(flightCode);
+
+            const altitude = flight.altitude ?? 0;
+
+            // กรอง 2: ถ้าเป็นเครื่องใหม่ที่ไม่เคยติดตามมาก่อน แล้วอยู่ต่ำกว่า 1500 ฟุต หรืออยู่บนพื้น ให้ข้ามไปเลย (กันพวกเครื่องจอดแช่)
+            if (!trackedETAs.has(flight.id) && (flight.isOnGround || altitude <= 1500)) continue;
+
+            // ดักจับ: ถ้าเครื่องนี้เราติดตามมาตั้งแต่บนฟ้า แล้วตอนนี้แตะพื้นแล้ว (Landed)
+            if (flight.isOnGround) {
+                const cachedData = trackedETAs.get(flight.id);
+                let landedStr = cachedData.eta;
+                
+                // ถ้ายังไม่เคยถูก stamp ว่า Landed ให้สร้างข้อความ Landed ขึ้นมา
+                if (!landedStr || !landedStr.startsWith("Landed")) {
+                    // ดึงเวลา Server มาทำเป็นเวลาไทยแบบง่ายๆ
+                    const hktDate = new Date(Date.now() + 7 * 3600 * 1000);
+                    const hh = String(hktDate.getUTCHours()).padStart(2, '0');
+                    const mm = String(hktDate.getUTCMinutes()).padStart(2, '0');
+                    landedStr = `Landed (ATA: ${hh}:${mm})`;
+                    
+                    // เซฟทับลง Cache พร้อมเริ่มนับเวลาใหม่ 30 นาที (ก่อนจะโดนลบทิ้ง)
+                    trackedETAs.set(flight.id, { eta: landedStr, fetchedAt: Date.now() });
+                }
+                
+                responseData.set(flight.id, {
+                    Flight: normFlightCode,
+                    ETA: landedStr
+                });
+                continue; // ข้ามไปลำต่อไปเลย ไม่ต้องไปยิง API
+            }
 
             // The Smart Caching (1-Time Fetch) + 30 Mins TTL
             // เช็คว่าไฟลท์นี้เคยดึง ETA มาแล้วหรือยัง
