@@ -60,6 +60,9 @@ function getHktTime(input) {
 let flightDataCache = [];
 let lastFetchTime = null;
 
+// Cache สำหรับจำค่า ETA เก่า เผื่อโดน FR24 บล็อคชั่วคราว (นี่คือเทคนิคที่ระบบเก่าใช้ซ่อน Error ครับ)
+const trackedETAs = new Map();
+
 const APPROACH_INTERVAL = 60000;     
 
 // Contiguous Approach Zones (5 Zones)
@@ -121,13 +124,32 @@ async function processFlightData(allFlights, groupName) {
         for (const flight of allFlights) {
             const destination = (flight.destination || "").toUpperCase();
             
-            // Only care about flights heading to HKT
+            // กรอง 1: เอาเฉพาะไฟลท์ที่เป้าหมายคือ HKT
             if (destination !== "HKT") continue;
+
+            // กรอง 2: เอาเฉพาะไฟลท์ที่บินอยู่บนฟ้า (altitude > 1500 ฟุต และไม่ได้อยู่บนพื้น)
+            const altitude = flight.altitude ?? 0;
+            if (flight.isOnGround || altitude <= 1500) continue;
 
             const callsign = flight.callsign || flight.flight || flight.registration || 'UNKNOWN';
             const normCallsign = normalizeFlightNumber(callsign);
 
-            // Stagger requests to prevent Rate Limiting from Flightradar24
+            // The Smart Caching (1-Time Fetch) + 30 Mins TTL
+            // เช็คว่าไฟลท์นี้เคยดึง ETA มาแล้วหรือยัง และดึงมานานเกิน 30 นาทีหรือยัง
+            const nowMs = Date.now();
+            if (trackedETAs.has(flight.id)) {
+                const cachedData = trackedETAs.get(flight.id);
+                // ถ้าค่าเดิมยังสดใหม่ (ไม่เกิน 30 นาที) ใช้ค่าเดิมเลย
+                if (nowMs - cachedData.fetchedAt < 30 * 60 * 1000) {
+                    responseData.set(flight.id, {
+                        Callsign: normCallsign,
+                        ETA: cachedData.eta
+                    });
+                    continue; // ข้ามการดึง API ไปเลย
+                }
+            }
+
+            // ถ้าเป็นไฟลท์ใหม่เพิ่งเข้าโซนมา ถึงจะเอาไปต่อคิวดึงข้อมูล
             const delay = requestIndex * 300; 
             requestIndex++;
 
@@ -136,16 +158,25 @@ async function processFlightData(allFlights, groupName) {
                     await new Promise(resolve => setTimeout(resolve, delay));
                     const detail = await withTimeout(fetchFlight(flight.id), 30000, `ArrivalDetail-${callsign}`);
                     const etaTime = detail.arrival || detail.scheduledArrival || null;
+                    const hktEta = getHktTime(etaTime);
                     
+                    if (hktEta) trackedETAs.set(flight.id, { eta: hktEta, fetchedAt: Date.now() });
+
                     responseData.set(flight.id, {
                         Callsign: normCallsign,
-                        ETA: getHktTime(etaTime)
+                        ETA: hktEta || null
                     });
                 } catch (e) {
                     console.error(`  ⚠️ Detail fetch failed for ${normCallsign}: ${e.message}`);
+                    
+                    // ป้องกันการ Spam เมื่อโดนบล็อค: 
+                    // ถ้าดึงพัง ให้จำเวลาปัจจุบันไว้เลยว่าเพิ่งลองดึงไป จะได้ไม่กลับมายิงถี่ๆ ทุก 1 นาทีให้โดนแบนหนักกว่าเดิม
+                    const oldEta = trackedETAs.has(flight.id) ? trackedETAs.get(flight.id).eta : null;
+                    trackedETAs.set(flight.id, { eta: oldEta, fetchedAt: Date.now() });
+
                     responseData.set(flight.id, {
                         Callsign: normCallsign,
-                        ETA: null // Fallback if detail fetch fails
+                        ETA: oldEta 
                     });
                 }
             })());
