@@ -65,13 +65,13 @@ const trackedETAs = new Map();
 
 const APPROACH_INTERVAL = 60000;     
 
-// Contiguous Approach Zones (5 Massive Zones เพื่อไม่ให้ตกหล่นแม้แต่ลำเดียว)
+// Contiguous Approach Zones (5 Massive Zones ครอบคลุมครึ่งโลกตะวันออก)
 const APPROACH_ZONES = [
-    { name: 'HKT-Approach-Center', north: 10.0, west: 96.0, south: 6.0, east: 100.0, options: {} },
-    { name: 'HKT-Approach-North', north: 35.0, west: 85.0, south: 10.0, east: 125.0, options: {} },
-    { name: 'HKT-Approach-South', north: 6.0, west: 90.0, south: -15.0, east: 125.0, options: {} },
-    { name: 'HKT-Approach-East', north: 10.0, west: 100.0, south: 6.0, east: 125.0, options: {} },
-    { name: 'HKT-Approach-West', north: 10.0, west: 50.0, south: 6.0, east: 96.0, options: {} },
+    { name: 'HKT-Zone-Center', north: 15.0, west: 90.0, south: -10.0, east: 110.0, options: {} }, // ไทย, มาเลเซีย, สิงคโปร์
+    { name: 'HKT-Zone-West', north: 50.0, west: 40.0, south: -10.0, east: 90.0, options: {} }, // ตะวันออกกลาง (Dubai/Qatar), อินเดีย, มัลดีฟส์
+    { name: 'HKT-Zone-North', north: 65.0, west: 90.0, south: 15.0, east: 110.0, options: {} }, // จีนตอนกลาง, รัสเซีย, พม่า
+    { name: 'HKT-Zone-East', north: 55.0, west: 110.0, south: 15.0, east: 150.0, options: {} }, // ญี่ปุ่น, เกาหลี, ไต้หวัน, จีนฝั่งตะวันออก
+    { name: 'HKT-Zone-South', north: 15.0, west: 110.0, south: -45.0, east: 160.0, options: {} }, // ออสเตรเลีย, อินโดนีเซีย, ฟิลิปปินส์
 ];
 
 const pollRunning = new Set(); 
