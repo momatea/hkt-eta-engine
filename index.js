@@ -177,14 +177,14 @@ async function processFlightData(allFlights, groupName) {
                 continue; // ข้ามไปลำต่อไปเลย ไม่ต้องไปยิง API
             }
 
-            // The Smart Caching (1-Time Fetch) + 30 Mins TTL
+            // The Smart Caching (1-Time Fetch) + 5 Mins TTL
             // เช็คว่าไฟลท์นี้เคยดึง ETA มาแล้วหรือยัง
             const nowMs = Date.now();
             if (trackedETAs.has(flight.id)) {
                 const cachedData = trackedETAs.get(flight.id);
-                // ถ้ามี ETA แล้ว และอายุไม่เกิน 30 นาที -> ใช้ของเดิม
+                // ถ้ามี ETA แล้ว และอายุไม่เกิน 5 นาที -> ใช้ของเดิม (ช่วยให้อัปเดตเวลาได้เรื่อยๆ โดยไม่สแปมถี่เกินไป)
                 // แต่ถ้า ETA เป็น null (เคยดึงล้มเหลว) จะรอแค่ 2 นาทีแล้วให้ลองดึงใหม่
-                const isFresh = cachedData.eta ? (nowMs - cachedData.fetchedAt < 30 * 60 * 1000) : (nowMs - cachedData.fetchedAt < 2 * 60 * 1000);
+                const isFresh = cachedData.eta ? (nowMs - cachedData.fetchedAt < 5 * 60 * 1000) : (nowMs - cachedData.fetchedAt < 2 * 60 * 1000);
                 
                 if (isFresh) {
                     responseData.set(flight.id, {
